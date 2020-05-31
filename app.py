@@ -1,8 +1,10 @@
 from flask import Flask, request
 import csv
 import psycopg2
+import collections
 
-#config variables
+
+# TODO: move these to config variables
 USER = 'postgres'
 PASSWORD = 'admin'
 HOST = '127.0.0.1'
@@ -17,7 +19,7 @@ app = Flask(__name__)
 def main():
     data = parse_csv()
     main_db_connection(data)
-    return 'Hello, World!'
+    return 'App started!'
 
 def parse_csv():
     CSV_FILE_NAME = 'covid_19_data.csv' 
@@ -52,8 +54,7 @@ def main_db_connection(data):
             insert_query(data, connection)
 
     except (Exception, psycopg2.Error) as error :
-        print ("Error while connecting to PostgreSQL", error)
-        return error
+        print (error)
     finally:
         if(connection):
             cursor.close()
@@ -96,7 +97,7 @@ def create_table(cursor):
             recovered   REAL
             ); 
         '''
-    
+
     cursor.execute(create_table_query)
 
 @app.route('/top/confirmed', methods=['GET'])
@@ -104,4 +105,67 @@ def get_top_confirmed():
 
     ob_date = request.args.get('observation_date', '')
     max_results = request.args.get('max_results', '')
-    return f'top confirmed!{ob_date}, {max_results}'
+
+    # TODO: validate args
+
+    data = get_all_data(ob_date)
+    if data:
+        return clean_data(data, ob_date, int(max_results))
+
+    return 'Error'
+
+
+
+def get_all_data(ob_date):
+    data = None
+    try:
+        connection = psycopg2.connect(user = USER,
+                                      password = PASSWORD,
+                                      host = HOST,
+                                      port = PORT,
+                                      database = DATABASE)
+
+        cursor = connection.cursor()
+        cursor.execute(f"""SELECT country, confirmed, deaths, recovered 
+                            from {TABLE_NAME}
+                            where ob_date <= '{ob_date}'
+                            """)
+        data = list(cursor.fetchall())
+        print(f'{len(data)} entries found')
+  
+    except (Exception, psycopg2.Error) as error :
+        print(error)
+
+    finally:
+        if(connection):
+            cursor.close()
+            connection.close()
+            print("PostgreSQL connection is closed")
+            return data
+
+
+def clean_data(data, ob_date, max_results):
+    countries = set(item[0] for item in data)
+    clean = {}
+    for country in countries:
+        clean[country] = { 'confirmed': 0,
+                           'deaths': 0,
+                           'recovered': 0,}
+    for item in data:
+        clean[item[0]]['country'] = item[0]
+        clean[item[0]]['confirmed'] += item[1]
+        clean[item[0]]['deaths'] += item[2]
+        clean[item[0]]['recovered'] += item[3]
+
+    result = collections.OrderedDict(sorted(clean.items(), key=lambda t:t[1]["confirmed"]))
+
+    final_countries = []
+    for i in range(max_results):
+        final_countries.append(result.popitem()[1])
+
+    final_result = { "observation_date": ob_date,
+                     "countries": final_countries
+    }
+
+    return final_result
+
